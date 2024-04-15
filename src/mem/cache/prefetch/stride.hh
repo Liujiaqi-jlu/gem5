@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 Inria
- * Copyright (c) 2012-2013, 2015, 2022 Arm Limited
+ * Copyright (c) 2012-2013, 2015, 2022, 2024 Arm Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -145,7 +145,7 @@ class Stride : public Queued
         SatCounter8 confidence;
     };
     typedef AssociativeSet<StrideEntry> PCTable;
-    std::unordered_map<int, PCTable> pcTables;
+    std::unordered_map<int, std::unique_ptr<PCTable>> pcTables;
 
     /**
      * Try to find a table of entries for the given context. If none is

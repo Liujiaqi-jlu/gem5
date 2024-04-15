@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 Inria
- * Copyright (c) 2012-2013, 2015, 2022-2023 Arm Limited
+ * Copyright (c) 2012-2013, 2015, 2022-2024 Arm Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -96,7 +96,7 @@ Stride::findTable(int context)
     // Check if table for given context exists
     auto it = pcTables.find(context);
     if (it != pcTables.end())
-        return &it->second;
+        return it->second.get();
 
     // If table does not exist yet, create one
     return allocateNewContext(context);
@@ -107,19 +107,18 @@ Stride::allocateNewContext(int context)
 {
     std::string table_name = name() + ".PCTable" + std::to_string(context);
     // Create new table
-    auto ins_result = pcTables.emplace(std::piecewise_construct,
-                           std::forward_as_tuple(context),
-                           std::forward_as_tuple(table_name.c_str(),
-                                                 pcTableInfo.numEntries,
-                                                 pcTableInfo.assoc,
-                                                 pcTableInfo.replacementPolicy,
-                                                 pcTableInfo.indexingPolicy,
-                                                 StrideEntry(initConfidence)));
+    pcTables[context].reset(new PCTable(
+        table_name.c_str(),
+        pcTableInfo.numEntries,
+        pcTableInfo.assoc,
+        pcTableInfo.replacementPolicy,
+        pcTableInfo.indexingPolicy,
+        StrideEntry(initConfidence)));
 
     DPRINTF(HWPrefetch, "Adding context %i with stride entries\n", context);
 
-    // Get iterator to new pc table, and then return a pointer to the new table
-    return &(ins_result.first->second);
+    // return a pointer to the new table
+    return pcTables[context].get();
 }
 
 void
