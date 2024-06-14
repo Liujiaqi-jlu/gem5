@@ -140,9 +140,9 @@ jobs:
       # bit of the files. We need to set the executable bit for the
       # gem5.opt binaries we've just downloaded.
     - run: |
-        find build -name "gem5.opt" | xargs chmod u+x
-        find build -name "gem5.fast" | xargs chmod u+x
-        find build -name "gem5.debug" | xargs chmod u+x
+        find build -name "gem5.opt" | xargs -r chmod u+x
+        find build -name "gem5.fast" | xargs -r chmod u+x
+        find build -name "gem5.debug" | xargs -r chmod u+x
 
       # Run the tests based on the subdirectory.
     - name: Long ${{ matrix.test-type }} tests
