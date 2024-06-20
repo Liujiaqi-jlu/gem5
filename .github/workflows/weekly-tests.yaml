@@ -10,98 +10,30 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-gcn-gpu-gem5:
+  gpu-tests:
     runs-on: [self-hosted, linux, x64]
     container: ghcr.io/gem5/gcn-gpu:latest
+    timeout-minutes: 300
+
     steps:
     - uses: actions/checkout@v4
       with:
-        # Scheduled workflows run on the default branch by default. We
-        # therefore need to explicitly checkout the develop branch.
         ref: develop
+    - name: Build VEGA_X86/gem5.opt
+      run: scons build/VEGA_X86/gem5.opt -j`nproc`
 
-    - name: Build gem5
-      run: scons build/VEGA_X86/gem5.opt -j $(nproc) --ignore-style
+    - name: Run Testlib GPU Tests
+      working-directory: ${{ github.workspace }}/tests
+      run: ./main.py run --length=very-long --skip-build -vvv -t $(nproc) --host
+        gcn_gpu
 
-    - uses: actions/upload-artifact@v4
-      with:
-        name: weekly-test-${{ github.run_number }}-attempt-${{ github.run_attempt
-          }}-gem5-build-vega
-        path: build/VEGA_X86/gem5.opt
-
-  LULESH-tests:
-    runs-on: [self-hosted, linux, x64]
-    container: ghcr.io/gem5/gcn-gpu:latest
-    needs: build-gcn-gpu-gem5
-    timeout-minutes: 480  # 8 hours
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        # Scheduled workflows run on the default branch by default. We
-        # therefore need to explicitly checkout the develop branch.
-        ref: develop
-
-    - name: Download build/VEGA_X86/gem5.opt
-      uses: actions/download-artifact@v4
-      with:
-        name: weekly-test-${{ github.run_number }}-attempt-\ ${{ github.run_attempt
-          }}-gem5-build-vega
-        path: build/VEGA_X86
-
-       # 'download-artifact' does not preserve permissions so we need to set
-       # them again.
-    - run: chmod u+x build/VEGA_X86/gem5.opt
-
-    - name: Obtain LULESH
-      # Obtains the latest LULESH compatible with this version of gem5 via
-      # gem5 Resources.
-      run: build/VEGA_X86/gem5.opt util/obtain-resource.py lulesh -p lulesh
-
-    - name: Run LULUESH tests
-      working-directory: ${{ github.workspace }}
-      run: |
-        build/VEGA_X86/gem5.opt configs/example/apu_se.py \
-          -n3 --mem-size=8GB --reg-alloc-policy=dynamic --dgpu \
-          --gfx-version=gfx900 -c lulesh --options="0.01 2"
-
-  HACC-tests:
-    runs-on: [self-hosted, linux, x64]
-    container: ghcr.io/gem5/gcn-gpu:latest
-    needs: build-gcn-gpu-gem5
-    timeout-minutes: 120 # 2 hours
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        # Scheduled workflows run on the default branch by default. We
-        # therefore need to explicitly checkout the develop branch.
-        ref: develop
-
-    - uses: actions/download-artifact@v4
+    - name: Upload results
+      if: success() || failure()
+      uses: actions/upload-artifact@v4.0.0
       with:
         name: |
-          weekly-test-${{ github.run_number }}-attempt-\
-          ${{ github.run_attempt }}-gem5-build-vega
-        path: build/VEGA_X86
-
-    - run: chmod u+x build/VEGA_X86/gem5.opt
-
-    - name: Make hip directory
-      run: mkdir hip
-
-    - name: Compile m5ops and x86
-      working-directory: ${{ github.workspace }}/util/m5
-      run: scons build/x86/out/m5
-
-    - name: Download tests
-      run: |
-        build/VEGA_X86/gem5.opt util/obtain-resource.py \
-          hacc-force-tree -p hip/ForceTreeTest
-
-    - name: Run HACC tests
-      run: |
-        build/VEGA_X86/gem5.opt configs/example/apu_se.py \
-          -n3 --reg-alloc-policy=dynamic --benchmark-root=hip \
-          -c ForceTreeTest --options="0.5 0.1 64 0.1 1 N 12 rcb"
+          gpu_COMMIT.${{github.sha}}_RUN.${{github.run_id}}_ATTEMPT.${{github.run_attempt}}
+        path: tests/testing-results
 
   build-gem5:
     runs-on: [self-hosted, linux, x64]
@@ -111,8 +43,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        # Scheduled workflows run on the default branch by default. We
-        # therefore need to explicitly checkout the develop branch.
+         # Scheduled workflows run on the default branch by default. We
+         # therefore need to explicitly checkout the develop branch.
         ref: develop
 
     - id: artifact-name
@@ -212,7 +144,6 @@ jobs:
     needs:
     - testlib-very-long-tests
     - dramsys-tests
-    - LULESH-test
-    - HACC-test
+    - gpu-tests
     steps:
     - run: echo "The Weekly tests have passed."
