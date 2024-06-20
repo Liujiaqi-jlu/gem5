@@ -133,7 +133,8 @@ jobs:
           ci-tests-${{ github.run_number }}-testlib-\
             $(echo '${{ matrix.build-target }}' \
             | sed 's/\//-/g' | sed 's/\./-/g')
-        path: '*${{ matrix.build-target }}'
+        working-directory: ${{ github.workspace }}
+        path: '*./build/*/gem5.opt'
 
   testlib-quick-execution:
     # This job runs the testlib quick tests.
@@ -155,6 +156,7 @@ jobs:
     - uses: actions/checkout@v4
     - uses: actions/download-artifact@v4
       with:
+        working-directory: ${{ github.workspace }}
         pattern: ci-tests-${{ github.run_number }}-testlib-build-*
         merge-multiple: true
 
