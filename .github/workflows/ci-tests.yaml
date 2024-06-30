@@ -1,236 +1,276 @@
----
-# This workflow runs after a pull-request has been approved by a reviewer.
-
+# This workflow runs after the CI tests when a user opens, edits, synchronizes,
+# or marks a pull request as ready for review. These tests must pass before a
+# pull request can be merged.
 name: CI Tests
 
 on:
-    pull_request:
-        types: [opened, edited, synchronize, ready_for_review]
+  pull_request:
+    types: [opened, edited, synchronize, ready_for_review]
 
 concurrency:
-    group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
-    cancel-in-progress: true
+  # We only want one instance of this workflow to run at a time for each PR.
+  # This ensures the workflow is cancelled if a new one is for the same PR is
+  # started.
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
-    pre-commit:
-    # runs on github hosted runner
-        runs-on: ubuntu-latest
-        if: github.event.pull_request.draft == false
-        steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-python@v5
-            - uses: pre-commit/action@v3.0.1
+  check-for-change-id:
+    # Ensures we have a change-id in every commit, needed for gerrit.
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Check for Change-Id
+      run: |
+        # loop through all the commits in the pull request
+        for commit in $(git rev-list \
+              ${{ github.event.pull_request.base.sha }}..\
+                ${{ github.event.pull_request.head.sha }}); do
+            git checkout $commit
+            if (git log -1 --pretty=format:"%B" | grep -q "Change-Id: ")
+            then
+              # passes as long as at least one change-id exists in the PR.
+              exit 0
+            fi
+        done
+        # if we reach this part, none of the commits had a change-id
+        echo "None of the commits in this pull request contains a Change-ID, \
+              which we require for any changes made to gem5. "\
+          "To automatically insert one, run the following:\n \
+          f=`git rev-parse --git-dir`/hooks/commit-msg ; \
+          mkdir -p $(dirname $f) ; "\
+          "curl -Lo $f \
+            https://gerrit-review.googlesource.com/tools/hooks/commit-msg ; \
+            chmod +x $f\n Then amend the commit with git commit --amend \
+            --no-edit, and update your pull request."
+        exit 1
 
-  # ensures we have a change-id in every commit, needed for gerrit
-    check-for-change-id:
-        # runs on github hosted runner
-        runs-on: ubuntu-latest
-        if: github.event.pull_request.draft == false
-        steps:
-            - uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
-            - name: Check for Change-Id
-              run: |
-                  # loop through all the commits in the pull request
-                  for commit in $(git rev-list ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}); do
-                      git checkout $commit
-                      if (git log -1 --pretty=format:"%B" | grep -q "Change-Id: ")
-                      then
-                        # passes as long as at least one change-id exists in the pull request
-                        exit 0
-                      fi
-                  done
-                  # if we reach this part, none of the commits had a change-id
-                  echo "None of the commits in this pull request contains a Change-ID, which we require for any changes made to gem5. "\
-                    "To automatically insert one, run the following:\n f=`git rev-parse --git-dir`/hooks/commit-msg ; mkdir -p $(dirname $f) ; "\
-                    "curl -Lo $f https://gerrit-review.googlesource.com/tools/hooks/commit-msg ; chmod +x $f\n Then amend the commit with git commit --amend --no-edit, and update your pull request."
-                  exit 1
+  unittests-all-opt:
+    # This job runs the unittests in build/ALL/unittests.opt.
+    runs-on: [self-hosted, linux, x64]
+    if: github.event.pull_request.draft == false
+    container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
+    needs: check-for-change-id
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - name: Unittests (ALL-opt)
+      run: scons build/ALL/unittests.opt -j $(nproc)
 
-    unittests-all-opt:
-        runs-on: [self-hosted, linux, x64]
-        if: github.event.pull_request.draft == false
-        container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
-        needs: [pre-commit, check-for-change-id] # only runs if pre-commit and change-id passes
-        timeout-minutes: 60
-        steps:
-            - uses: actions/checkout@v4
-            - name: CI Unittests
-              working-directory: ${{ github.workspace }}
-              run: scons build/ALL/unittests.opt -j $(nproc)
-            - run: echo "This job's status is ${{ job.status }}."
+  testlib-quick-matrix:
+    # This job generates a matrix of gem5 build targets for the testlib quick
+    # tests as well as a matrix of test directories containing the tests.
+    runs-on: [self-hosted, linux, x64]
+    if: github.event.pull_request.draft == false
+    container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
+    needs: check-for-change-id
+    steps:
+    - uses: actions/checkout@v4
 
-    testlib-quick-matrix:
-        runs-on: [self-hosted, linux, x64]
-        if: github.event.pull_request.draft == false
-    # In order to make sure the environment is exactly the same, we run in
-    # the same container we use to build gem5 and run the testlib tests. This
-        container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
-        needs: [pre-commit, check-for-change-id]
-        steps:
-            - uses: actions/checkout@v4
+    - name: Get target test dirs for testlib tests
+      working-directory: ${{ github.workspace }}/tests
+      id: dir-matrix
+      run: |
+        echo "test-dirs-matrix=\
+          $(find gem5/* -type d -maxdepth 0 | jq -ncR '[inputs]')" \
+          >>$GITHUB_OUTPUT
 
-            # Unfortunately the image doesn't have jq installed.
-            # We therefore need to install it as a step here.
-            - name: Install jq
-              run: apt update && apt install -y jq
+    - name: Get gem5 build targets for testlib tests
+      working-directory: ${{ github.workspace }}/tests
+      id: build-matrix
+      run: |
+        echo "build-matrix=\
+          $(./main.py list --build-targets -q | jq -ncR '[inputs]')" \
+          >>$GITHUB_OUTPUT
 
-            - name: Get directories for testlib-quick
-              working-directory: ${{ github.workspace }}/tests
-              id: dir-matrix
-              run: echo "test-dirs-matrix=$(find gem5/* -type d -maxdepth 0 | jq -ncR '[inputs]')" >>$GITHUB_OUTPUT
+    outputs:
+      build-matrix: ${{ steps.build-matrix.outputs.build-matrix }}
+      test-dirs-matrix: ${{ steps.dir-matrix.outputs.test-dirs-matrix }}
 
-            - name: Get the build targets for testlib-quick-gem5-builds
-              working-directory: ${{ github.workspace }}/tests
-              id: build-matrix
-              run: echo "build-matrix=$(./main.py list --build-targets -q | jq -ncR '[inputs]')" >>$GITHUB_OUTPUT
+  clang-fast-compilation:
+    # gem5 binaries built in `quick-gem5-builds` always use GCC.
+    # Clang is more strict than GCC. This job checks that gem5 compiles
+    # with Clang. It compiles build/ALL/gem5.fast to maximize the change
+    # for compilation error to be exposed.
+    runs-on: [self-hosted, linux, x64]
+    if: github.event.pull_request.draft == false
+    container: ghcr.io/gem5/clang-version-16:latest
+    needs: check-for-change-id
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+    - name: Clang Compilation
+      run: scons build/ALL/gem5.fast -j $(nproc)
 
-        outputs:
-            build-matrix: ${{ steps.build-matrix.outputs.build-matrix }}
-            test-dirs-matrix: ${{ steps.dir-matrix.outputs.test-dirs-matrix }}
+  testlib-quick-gem5-builds:
+    # This job builds gem5 for all build targets in the matrix generated by
+    # the testlib-quick-matrix job.
+    runs-on: [self-hosted, linux, x64]
+    if: github.event.pull_request.draft == false
+    container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
+    needs:
+    - check-for-change-id
+    - testlib-quick-matrix
+    strategy:
+      matrix:
+        build-target: ${{ fromJson(needs.testlib-quick-matrix.outputs.build-matrix)
+          }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build ${{ matrix.build-target }}
+      run: scons ${{ matrix.build-target }} -j $(nproc)
 
-    clang-fast-compilation:
-        # gem5 binaries built in `quick-gem5-builds` always use GCC.
-        # Clang is more strict than GCC. This job checks that gem5 compiles
-        # with Clang. It compiles build/ALL/gem5.fast to maximize the change
-        # for compilation error to be exposed.
-        runs-on: [self-hosted, linux, x64]
-        if: github.event.pull_request.draft == false
-        container: ghcr.io/gem5/clang-version-16:latest
-        needs: [pre-commit, check-for-change-id]
-        timeout-minutes: 90
-        steps:
-            - uses: actions/checkout@v4
-            - name: Clang Compilation
-              working-directory: ${{ github.workspace }}
-              run: scons build/ALL/gem5.fast -j $(nproc)
+      # Here we upload the gem5 binary as an artifact.
+    - name: Upload ${{ matrix.build-target }} as an artifact
+      uses: actions/upload-artifact@v4
+      with:
+        # There is some sanitization of the build-target to make it a valid.
+        # We replace all '/' amd '.' with '-'.
+        name: |
+          ci-tests-${{ github.run_number }}-testlib-\
+            $(echo '${{ matrix.build-target }}' \
+            | sed 's/\//-/g' | sed 's/\./-/g')
+        working-directory: ${{ github.workspace }}
+        path: '*./build/*/gem5.opt'
 
-    testlib-quick-gem5-builds:
-        runs-on: [self-hosted, linux, x64]
-        if: github.event.pull_request.draft == false
-        container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
-        needs: [pre-commit, check-for-change-id, testlib-quick-matrix]
-        strategy:
-            matrix:
-                build-target: ${{ fromJson(needs.testlib-quick-matrix.outputs.build-matrix) }}
-        steps:
-            - uses: actions/checkout@v4
-            - name: Build gem5
-              run: scons ${{ matrix.build-target }} -j $(nproc)
+  testlib-quick-execution:
+    # This job runs the testlib quick tests.
+    runs-on: [self-hosted, linux, x64]
+    if: github.event.pull_request.draft == false
+    container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
+    needs:
+    - check-for-change-id
+    - testlib-quick-matrix
+    - testlib-quick-gem5-builds
+    timeout-minutes: 360 # 6 hours
+    strategy:
+      fail-fast: false
+      matrix:
+        test-dir: ${{ fromJson(needs.testlib-quick-matrix.outputs.test-dirs-matrix)
+          }}
+    steps:
+      # Checkout the repository then download the gem5 binaries.
+    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        working-directory: ${{ github.workspace }}
+        pattern: ci-tests-${{ github.run_number }}-testlib-build-*
+        merge-multiple: true
 
-        # Upload the gem5 binary as an artifact.
-        # Note: the "achor.txt" file is a hack to make sure the paths are
-        # preserverd in the artifact. The upload-artifact action finds the
-        # closest common directory and uploads everything relative to that.
-        # E.g., if we upload "build/ARM/gem5.opt" and "build/RISCV/gem5.opt"
-        # Then upload-artifact will upload "ARM/gem5.opt" and "RISCV/gem5.opt",
-        # stripping the "build" directory. By adding the "anchor.txt" file, we
-        # ensure the "build" directory is preserved.
-            - run: echo "anchor" > anchor.txt
-            - uses: actions/upload-artifact@v4
-              with:
-                  name: ci-tests-${{ github.run_number }}-testlib-quick-all-gem5-builds
-                  path: |
-                      build/*/gem5.*
-                      anchor.txt
-                  retention-days: 7
 
-    testlib-quick-execution:
-        runs-on: [self-hosted, linux, x64]
-        if: github.event.pull_request.draft == false
-        container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
-        needs: [pre-commit, check-for-change-id, testlib-quick-matrix, testlib-quick-gem5-builds]
-        timeout-minutes: 360 # 6 hours
-        strategy:
-            fail-fast: false
-            matrix:
-                test-dir: ${{ fromJson(needs.testlib-quick-matrix.outputs.test-dirs-matrix) }}
-        steps:
-            - name: Clean runner
-              run: rm -rf ./* || true rm -rf ./.??* || true rm -rf ~/.cache || true
+      # Check that the gem5.opt artifact exists and ensure it is executable.
+    - name: Chmod gem5.{opt,debug,fast} to be executable
+      run: |
+        find . -name "gem5.opt" | xargs -r chmod u+x
+        find . -name "gem5.debug" | xargs -r chmod u+x
+        find . -name "gem5.fast" | xargs -r chmod u+x
 
-        # Checkout the repository then download the gem5.opt artifact.
-            - uses: actions/checkout@v4
-            - uses: actions/download-artifact@v4
-              with:
-                  name: ci-tests-${{ github.run_number }}-testlib-quick-all-gem5-builds
+      # Run the testlib quick tests in the given directory.
+    - name: Run "tests/${{ matrix.test-dir }}" TestLib quick tests
+      id: run-tests
+      working-directory: ${{ github.workspace }}/tests
+      run: ./main.py run --skip-build -vvv ${{ matrix.test-dir }}
 
-        # Check that the gem5.opt artifact exists and is executable.
-            - name: Chmod gem5.{opt,debug,fast} to be executable
-              run: |
-                  find . -name "gem5.opt" -exec chmod u+x {} \;
-                  find . -name "gem5.debug" -exec chmod u+x {} \;
-                  find . -name "gem5.fast" -exec chmod u+x {} \;
+      # Get the basename of the matrix.test-dir path (to name the artifact).
+    - name: Sanatize test-dir for artifact name
+      id: sanitize-test-dir
+      if: success() || failure()
+      run: |
+        echo "sanatized-test-dir=\
+          $(echo '${{ matrix.test-dir }}' | sed 's/\//-/g')" >> $GITHUB_OUTPUT
 
-        # Run the testlib quick tests in the given directory.
-            - name: Run "tests/${{ matrix.test-dir }}" TestLib quick tests
-              id: run-tests
-              working-directory: ${{ github.workspace }}/tests
-              run: ./main.py run --skip-build -vv -j$(nproc) ${{ matrix.test-dir }}
+      # Upload the tests/testing-results directory as an artifact.
+    - name: upload results
+      if: success() || failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: |
+          ci-tests-run-${{ github.run_number }}-attempt-\
+          ${{ github.run_attempt }}-testlib-quick-\
+          ${{ steps.sanitize-test-dir.outputs.sanatized-test-dir }}-status-\
+          ${{ steps.run-tests.outcome }}-output
+        path: tests/testing-results
+        retention-days: 30
 
-        # Get the basename of the matrix.test-dir path (to name the artifact).
-            - name: Sanatize test-dir for artifact name
-              id: sanitize-test-dir
-              if: success() || failure()
-              run: echo "sanatized-test-dir=$(echo '${{ matrix.test-dir }}' | sed 's/\//-/g')" >> $GITHUB_OUTPUT
+  pyunit:
+    # This job runs the pyunit tests.
+    runs-on: [self-hosted, linux, x64]
+    if: github.event.pull_request.draft == false
+    container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
+    needs: [check-for-change-id, testlib-quick-gem5-builds]
+    timeout-minutes: 30
+    steps:
+      # Checkout the repository then download the builds.
+    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: ci-tests-${{ github.run_number }}-testlib-build-*
+        merge-multiple: true
 
-        # Upload the tests/testing-results directory as an artifact.
-            - name: upload results
-              if: success() || failure()
-              uses: actions/upload-artifact@v4
-              with:
-                  name: ci-tests-run-${{ github.run_number }}-attempt-${{ github.run_attempt }}-testlib-quick-${{ steps.sanitize-test-dir.outputs.sanatized-test-dir
-                      }}-status-${{ steps.run-tests.outcome }}-output
-                  path: tests/testing-results
-                  retention-days: 30
+      # Check that the gem5 binaries exist and are executable.
+    - name: Chmod gem5.{opt,debug,fast} to be executable
+      run: |
+        find . -name "gem5.opt" | xargs -r chmod u+x
+        find . -name "gem5.debug" | xargs -r chmod u+x
+        find . -name "gem5.fast" | xargs -r chmod u+x
 
-    pyunit:
-        runs-on: [self-hosted, linux, x64]
-        if: github.event.pull_request.draft == false
-        container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
-        needs: [pre-commit, check-for-change-id, testlib-quick-gem5-builds]
-        timeout-minutes: 30
-        steps:
+      # Run the pyunit tests.
+    - name: Run The pyunit tests
+      working-directory: ${{ github.workspace }}/tests
+      run: ./main.py run --skip-build -vvv pyunit
 
-            # Checkout the repository then download the builds.
-            - uses: actions/checkout@v4
-            - uses: actions/download-artifact@v4
-              with:
-                  name: ci-tests-${{ github.run_number }}-testlib-quick-all-gem5-builds
+      # Upload the tests/testing-results directory as an artifact.
+    - name: Upload pyunit test results
+      if: success() || failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: |
+          ci-tests-run-${{ github.run_number }}-attempt-\
+          ${{ github.run_attempt }}-pyunit-status-\
+          ${{ steps.run-tests.outcome }}-output
+        path: tests/testing-results
+        retention-days: 30
 
-            # Check that the gem5 binaries exist and are executable.
-            - name: Chmod gem5.{opt,debug,fast} to be executable
-              run: |
-                  find . -name "gem5.opt" -exec chmod u+x {} \;
-                  find . -name "gem5.debug" -exec chmod u+x {} \;
-                  find . -name "gem5.fast" -exec chmod u+x {} \;
+  gpu-tests:
+    runs-on: [self-hosted, linux, x64]
+    container: ghcr.io/gem5/gcn-gpu:latest
+    timeout-minutes: 180
+    needs: [check-for-change-id]
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: develop
+    - name: Build VEGA_X86/gem5.opt
+      run: scons build/VEGA_X86/gem5.opt -j`nproc`
 
-            # Run the pyunit tests.
-            # Note: these are all quick tests.
-            - name: Run The pyunit tests
-              id: run-tests
-              working-directory: ${{ github.workspace }}/tests
-              run: ./main.py run --skip-build -vv -j$(nproc) pyunit
+    - name: Run Testlib GPU Tests
+      working-directory: ${{ github.workspace }}/tests
+      run: ./main.py run  --skip-build -vvv -t $(nproc) --host gcn_gpu gem5/gpu
 
-            # Upload the tests/testing-results directory as an artifact.
-            - name: Upload pyunit test results
-              if: success() || failure()
-              uses: actions/upload-artifact@v4
-              with:
-                  name: ci-tests-run-${{ github.run_number }}-attempt-${{ github.run_attempt }}-pyunit-status-${{ steps.run-tests.outcome }}-output
-                  path: tests/testing-results
-                  retention-days: 30
+    - name: Upload results
+      if: success() || failure()
+      uses: actions/upload-artifact@v4.0.0
+      with:
+        with:
+        name: ci-tests-run-${{ github.run_number }}-attempt-${{ github.run_attempt
+          }}-gpu-status-${{ steps.run-tests.outcome }}-output
+        path: tests/testing-results
+        retention-days: 30
 
-    ci-tests:
-    # It is 'testlib-quick' which needs to pass for the pull request to be
-    # merged. This job is a dummy job that depends on all the other jobs.
-        runs-on: ubuntu-latest
-        needs:
-            - testlib-quick-execution
-            - pyunit
-            - clang-fast-compilation
-            - unittests-all-opt
-            - pre-commit
-            - check-for-change-id
-        steps:
-            - run: echo "This job's status is ${{ job.status }}."
+  ci-tests:
+    # This job is a status check for the pull request. If this job passes the
+    # pull request can be merged
+    runs-on: ubuntu-latest
+    needs:
+    - testlib-quick-execution
+    - pyunit
+    - clang-fast-compilation
+    - unittests-all-opt
+    - check-for-change-id
+    - gpu-tests
+
+    steps:
+    - run: echo "The CI tests have passed."
