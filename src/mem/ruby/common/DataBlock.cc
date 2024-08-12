@@ -40,8 +40,8 @@
 
 #include "mem/ruby/common/DataBlock.hh"
 
+#include "mem/ruby/common/Address.hh"
 #include "mem/ruby/common/WriteMask.hh"
-#include "mem/ruby/system/RubySystem.hh"
 
 namespace gem5
 {
@@ -51,8 +51,11 @@ namespace ruby
 
 DataBlock::DataBlock(const DataBlock &cp)
 {
+    assert(cp.isAlloc());
+    assert(!m_alloc);
+
     uint8_t *block_update;
-    size_t block_bytes = RubySystem::getBlockSizeBytes();
+    size_t block_bytes = m_block_size;
     m_data = new uint8_t[block_bytes];
     memcpy(m_data, cp.m_data, block_bytes);
     m_alloc = true;
@@ -69,21 +72,44 @@ DataBlock::DataBlock(const DataBlock &cp)
 void
 DataBlock::alloc()
 {
-    m_data = new uint8_t[RubySystem::getBlockSizeBytes()];
+    assert(!m_alloc);
+
+    if (!m_block_size) {
+        return;
+    }
+
+    m_data = new uint8_t[m_block_size];
     m_alloc = true;
     clear();
 }
 
 void
+DataBlock::realloc(int blk_size)
+{
+    m_block_size = blk_size;
+    assert(m_block_size > 0);
+
+    if (m_alloc) {
+        delete [] m_data;
+        m_alloc = false;
+    }
+    alloc();
+}
+
+void
 DataBlock::clear()
 {
-    memset(m_data, 0, RubySystem::getBlockSizeBytes());
+    assert(m_alloc);
+    assert(m_block_size > 0);
+    memset(m_data, 0, m_block_size);
 }
 
 bool
 DataBlock::equal(const DataBlock& obj) const
 {
-    size_t block_bytes = RubySystem::getBlockSizeBytes();
+    assert(m_alloc);
+    assert(m_block_size > 0);
+    size_t block_bytes = m_block_size;
     // Check that the block contents match
     if (memcmp(m_data, obj.m_data, block_bytes)) {
         return false;
@@ -102,7 +128,9 @@ DataBlock::equal(const DataBlock& obj) const
 void
 DataBlock::copyPartial(const DataBlock &dblk, const WriteMask &mask)
 {
-    for (int i = 0; i < RubySystem::getBlockSizeBytes(); i++) {
+    assert(m_alloc);
+    assert(m_block_size > 0);
+    for (int i = 0; i < m_block_size; i++) {
         if (mask.getMask(i, 1)) {
             m_data[i] = dblk.m_data[i];
         }
@@ -113,7 +141,9 @@ void
 DataBlock::atomicPartial(const DataBlock &dblk, const WriteMask &mask,
         bool isAtomicNoReturn)
 {
-    for (int i = 0; i < RubySystem::getBlockSizeBytes(); i++) {
+    assert(m_alloc);
+    assert(m_block_size > 0);
+    for (int i = 0; i < m_block_size; i++) {
         m_data[i] = dblk.m_data[i];
     }
     mask.performAtomic(m_data, m_atomicLog, isAtomicNoReturn);
@@ -122,7 +152,9 @@ DataBlock::atomicPartial(const DataBlock &dblk, const WriteMask &mask,
 void
 DataBlock::print(std::ostream& out) const
 {
-    int size = RubySystem::getBlockSizeBytes();
+    assert(m_alloc);
+    assert(m_block_size > 0);
+    int size = m_block_size;
     out << "[ ";
     for (int i = 0; i < size; i++) {
         out << std::setw(2) << std::setfill('0') << std::hex
@@ -147,6 +179,7 @@ DataBlock::popAtomicLogEntryFront()
 void
 DataBlock::clearAtomicLogEntries()
 {
+    assert(m_alloc);
     for (auto log : m_atomicLog) {
         delete [] log;
     }
@@ -156,35 +189,54 @@ DataBlock::clearAtomicLogEntries()
 const uint8_t*
 DataBlock::getData(int offset, int len) const
 {
-    assert(offset + len <= RubySystem::getBlockSizeBytes());
+    assert(m_alloc);
+    assert(m_block_size > 0);
+    assert(offset + len <= m_block_size);
     return &m_data[offset];
 }
 
 uint8_t*
 DataBlock::getDataMod(int offset)
 {
+    assert(m_alloc);
     return &m_data[offset];
 }
 
 void
 DataBlock::setData(const uint8_t *data, int offset, int len)
 {
+    assert(m_alloc);
     memcpy(&m_data[offset], data, len);
 }
 
 void
 DataBlock::setData(PacketPtr pkt)
 {
+    assert(m_alloc);
+    assert(m_block_size > 0);
     int offset = getOffset(pkt->getAddr());
-    assert(offset + pkt->getSize() <= RubySystem::getBlockSizeBytes());
+    assert(offset + pkt->getSize() <= m_block_size);
     pkt->writeData(&m_data[offset]);
 }
 
 DataBlock &
 DataBlock::operator=(const DataBlock & obj)
 {
+    // Reallocate if needed
+    if (m_alloc && m_block_size != obj.getBlockSize()) {
+        delete [] m_data;
+        m_block_size = obj.getBlockSize();
+        alloc();
+    } else if (!m_alloc) {
+        m_block_size = obj.getBlockSize();
+        alloc();
+    } else {
+        assert(m_alloc && m_block_size == obj.getBlockSize());
+    }
+    assert(m_block_size > 0);
+
     uint8_t *block_update;
-    size_t block_bytes = RubySystem::getBlockSizeBytes();
+    size_t block_bytes = m_block_size;
     // Copy entire block contents from obj to current block
     memcpy(m_data, obj.m_data, block_bytes);
     // If this data block is involved in an atomic operation, the effect

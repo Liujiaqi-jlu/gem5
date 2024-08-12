@@ -382,7 +382,11 @@ AbstractController::recvTimingResp(PacketPtr pkt)
         return false;
     }
 
-    std::shared_ptr<MemoryMsg> msg = std::make_shared<MemoryMsg>(clockEdge());
+    // TODO
+    int blk_size = RubySystem::getBlockSizeBytes();
+
+    std::shared_ptr<MemoryMsg> msg =
+        std::make_shared<MemoryMsg>(clockEdge(), blk_size);
     (*msg).m_addr = pkt->getAddr();
     (*msg).m_Sender = m_machineID;
 

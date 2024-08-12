@@ -126,6 +126,7 @@ RubyPrefetcherProxy::issuePrefetch()
 
                 std::shared_ptr<RubyRequest> msg =
                     std::make_shared<RubyRequest>(cacheCntrl->clockEdge(),
+                                                  blk_size,
                                                   pkt->getAddr(),
                                                   blk_size,
                                                   0, // pc

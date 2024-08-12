@@ -253,15 +253,36 @@ namespace ruby
 $klass ${{self.c_ident}}$parent
 {
   public:
-    ${{self.c_ident}}
 """,
             klass="class",
         )
 
         if self.isMessage:
-            code("(Tick curTime) : %s(curTime) {" % self["interface"])
+            code(
+                "${{self.c_ident}}(Tick curTime, int blockSize) : %s(curTime, blockSize)"
+                % self["interface"]
+            )
+
+            for dm in self.data_members.values():
+                if dm.real_c_type in ("DataBlock"):
+                    code(f"\t\t, m_{dm.ident}(blockSize)")
+
+            code("{")
         else:
-            code("()\n\t\t{")
+            code("${{self.c_ident}}()")
+            # code("${{self.c_ident}}(int blockSize)")
+
+            ctor_count = 0
+            for dm in self.data_members.values():
+                if dm.real_c_type in ("DataBlock"):
+                    if ctor_count == 0:
+                        code("\t:")
+                    else:
+                        code("\t, ")
+                    code(f"\t\tm_{dm.ident}(0)")
+                    ctor_count += 1
+
+            code("{")
 
         code.indent()
         if not self.isGlobal:
@@ -300,21 +321,40 @@ $klass ${{self.c_ident}}$parent
             params = ", ".join(params)
 
             if self.isMessage:
-                params = "const Tick curTime, " + params
+                params = "const Tick curTime, const int blockSize, " + params
 
             code("${{self.c_ident}}($params)")
 
             # Call superclass constructor
             if "interface" in self:
                 if self.isMessage:
-                    code('    : ${{self["interface"]}}(curTime)')
+                    code('    : ${{self["interface"]}}(curTime, blockSize)')
+
+                    for dm in self.data_members.values():
+                        if dm.real_c_type in ("DataBlock"):
+                            code(f"\t\t, m_{dm.ident}(blockSize)")
                 else:
                     code('    : ${{self["interface"]}}()')
+
+                    for dm in self.data_members.values():
+                        if dm.real_c_type in ("DataBlock"):
+                            code(f"\t\t, m_{dm.ident}(local_{dm.ident})")
+            else:
+                for dm in self.data_members.values():
+                    ctor_count = 0
+                    if dm.real_c_type in ("DataBlock"):
+                        if ctor_count == 0:
+                            code("\t:")
+                        else:
+                            code("\t, ")
+                        code(f"\t\tm_{dm.ident}(local_{dm.ident})")
+                        ctor_count += 1
 
             code("{")
             code.indent()
             for dm in self.data_members.values():
-                code("m_${{dm.ident}} = local_${{dm.ident}};")
+                if not dm.real_c_type in ("DataBlock"):
+                    code("m_${{dm.ident}} = local_${{dm.ident}};")
 
             code.dedent()
             code("}")
