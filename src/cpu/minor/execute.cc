@@ -604,6 +604,16 @@ Execute::issue(ThreadID thread_id)
             do {
                 FUPipeline *fu = funcUnits[fu_index];
 
+                // Update ALU access stats.
+                if (inst->staticInst->isVector()) {
+                    cpu.executeStats[inst->id.threadId]->numVecAluAccesses++;
+                } else if (inst->staticInst->isFloating()) {
+                    cpu.executeStats[inst->id.threadId]->numFpAluAccesses++;
+                } else if (inst->staticInst->isInteger()) {
+                    cpu.executeStats[inst->id.threadId]->numIntAluAccesses++;
+                }
+
+
                 DPRINTF(MinorExecute, "Trying to issue inst: %s to FU: %d\n",
                     *inst, fu_index);
 
