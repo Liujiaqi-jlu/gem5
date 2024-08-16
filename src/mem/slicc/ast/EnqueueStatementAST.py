@@ -76,7 +76,7 @@ class EnqueueStatementAST(StatementAST):
         # Declare message
         code(
             "std::shared_ptr<${{msg_type.c_ident}}> out_msg = "
-            "std::make_shared<${{msg_type.c_ident}}>(clockEdge());"
+            "std::make_shared<${{msg_type.c_ident}}>(clockEdge(), 64);"
         )
 
         # The other statements

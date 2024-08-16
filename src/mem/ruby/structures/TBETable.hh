@@ -113,6 +113,8 @@ TBETable<ENTRY>::allocate(Addr address)
     assert(!isPresent(address));
     assert(m_map.size() < m_number_of_TBEs);
     m_map[address] = ENTRY();
+    printf("TBE allocation and realloc db to 64\n");
+    m_map[address].getDataBlk().realloc(64); /* TODO */
 }
 
 template<class ENTRY>

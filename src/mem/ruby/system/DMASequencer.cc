@@ -110,8 +110,11 @@ DMASequencer::makeRequest(PacketPtr pkt)
 
     DPRINTF(RubyDma, "DMA req created: addr %p, len %d\n", line_addr, len);
 
+    // TODO
+    int blk_size = RubySystem::getBlockSizeBytes();
+
     std::shared_ptr<SequencerMsg> msg =
-        std::make_shared<SequencerMsg>(clockEdge());
+        std::make_shared<SequencerMsg>(clockEdge(), blk_size);
     msg->getPhysicalAddress() = paddr;
     msg->getLineAddress() = line_addr;
 
@@ -183,8 +186,11 @@ DMASequencer::issueNext(const Addr& address)
         return;
     }
 
+    // TODO
+    int blk_size = RubySystem::getBlockSizeBytes();
+
     std::shared_ptr<SequencerMsg> msg =
-        std::make_shared<SequencerMsg>(clockEdge());
+        std::make_shared<SequencerMsg>(clockEdge(), blk_size);
     msg->getPhysicalAddress() = active_request.start_paddr +
                                 active_request.bytes_completed;
 
