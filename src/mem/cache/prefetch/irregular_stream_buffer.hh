@@ -38,10 +38,11 @@
 #ifndef __MEM_CACHE_PREFETCH_IRREGULAR_STREAM_BUFFER_HH__
 #define __MEM_CACHE_PREFETCH_IRREGULAR_STREAM_BUFFER_HH__
 
+#include "base/cache/associative_cache.hh"
 #include "base/callback.hh"
 #include "base/sat_counter.hh"
-#include "mem/cache/prefetch/associative_set.hh"
 #include "mem/cache/prefetch/queued.hh"
+#include "mem/cache/tags/tagged_entry.hh"
 
 namespace gem5
 {
@@ -66,11 +67,14 @@ class IrregularStreamBuffer : public Queued
      */
     struct TrainingUnitEntry : public TaggedEntry
     {
+        TrainingUnitEntry(TaggedIndexingPolicy *ip)
+          : TaggedEntry(ip), lastAddress(0), lastAddressSecure(false)
+        {}
         Addr lastAddress;
         bool lastAddressSecure;
     };
     /** Map of PCs to Training unit entries */
-    AssociativeSet<TrainingUnitEntry> trainingUnit;
+    AssociativeCache<TrainingUnitEntry> trainingUnit;
 
     /** Address Mapping entry, holds an address and a confidence counter */
     struct AddressMapping
@@ -88,8 +92,9 @@ class IrregularStreamBuffer : public Queued
     struct AddressMappingEntry : public TaggedEntry
     {
         std::vector<AddressMapping> mappings;
-        AddressMappingEntry(size_t num_mappings, unsigned counter_bits)
-          : TaggedEntry(), mappings(num_mappings, counter_bits)
+        AddressMappingEntry(size_t num_mappings, unsigned counter_bits,
+                            TaggedIndexingPolicy *ip)
+          : TaggedEntry(ip), mappings(num_mappings, counter_bits)
         {
         }
 
@@ -105,9 +110,9 @@ class IrregularStreamBuffer : public Queued
     };
 
     /** Physical-to-Structured mappings table */
-    AssociativeSet<AddressMappingEntry> psAddressMappingCache;
+    AssociativeCache<AddressMappingEntry> psAddressMappingCache;
     /** Structured-to-Physical mappings table */
-    AssociativeSet<AddressMappingEntry> spAddressMappingCache;
+    AssociativeCache<AddressMappingEntry> spAddressMappingCache;
     /**
      * Counter of allocated structural addresses, increased by "chunkSize",
      * each time a new structured address is allocated
